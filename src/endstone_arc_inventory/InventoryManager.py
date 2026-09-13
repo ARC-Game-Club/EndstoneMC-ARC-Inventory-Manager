@@ -6,6 +6,7 @@ Endstone ItemMeta.enchants 返回 dict[Enchantment, int]，键不可哈希会报
 故通过 get_enchant_level(id: str) 逐个查询已知附魔 id 获取等级。
 """
 import base64
+import json
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -20,6 +21,167 @@ ARMOR_ATTRS: Tuple[str, ...] = (
     "boots",
     "item_in_off_hand",
 )
+
+# ---------------------------------------------------------------------------
+# NBT 序列化 / 还原
+#
+# endstone 0.11.3 的 endstone.nbt 只导出标签类，**没有 load() / dump()**，
+# 因此无法走二进制往返，只能遍历标签树 -> 重建。
+# 重建时必须按字段名还原成正确的标签类型：全部写成 IntTag 的话服务端读回无误，
+# 但客户端渲染不出来（潜影盒取出来是空的）。
+# 字段表来自基岩版真实 NBT 数据实测。
+# ---------------------------------------------------------------------------
+
+# 标签类型为 Byte 的字段（含 Block.states 里的方块状态位字段）
+_NBT_BYTE_FIELDS = {
+    "Slot", "Count", "WasPickedUp", "inverted", "Findable",
+    "KeepPacked", "OnGround", "Fire", "SpawnEgg",
+    "open_bit", "triggered_bit", "powered_bit", "toggle_bit",
+    "occupied_bit", "in_wall_bit", "button_pressed_bit",
+    "top_slot_bit", "conditional_bit", "update_bit",
+    "waterlogged", "stripped_bit", "extinguished",
+    "drag_down", "paused", "attached_bit", "disarmed_bit",
+    "door_hinge_bit", "upper_block_bit", "upside_down_bit",
+    "infiniburn_bit", "allow_underwater_bit",
+    "brewing_stand_slot_a_bit", "brewing_stand_slot_b_bit",
+    "brewing_stand_slot_c_bit", "covered_bit",
+}
+
+# 标签类型为 Short 的字段
+_NBT_SHORT_FIELDS = {"Damage", "Health", "Age"}
+
+
+def _tag_to_jsonable(tag: Any) -> Any:
+    """把 NBT 标签树转成可 JSON 序列化的结构，**每个数值都带上真实标签类型**。
+
+    两条都不能省：
+
+    1) 不能用 CompoundTag.to_dict() —— 它是有损的：
+       ByteArrayTag -> bytes（json.dumps 抛 TypeError，被 except 吞掉后返回 None，
+       结果是**静默丢失整份 NBT** —— 潜影盒存进去但内容物没了且无任何报错）、
+       IntArrayTag -> list、FloatTag -> float、LongTag -> int。
+
+    2) **不能靠字段名猜类型**。曾经用 _NBT_BYTE_FIELDS / _NBT_SHORT_FIELDS 两张
+       表，表里没收录的字段一律降级成 IntTag。结果附魔书的 `lvl`/`id`（应为 Short）
+       和烟花火箭的 `Flight`（应为 Byte）都被写成了 IntTag，客户端按错误类型读，
+       表现为**附魔等级变 0、烟花飞行时间变 0**。这种"漏一个字段就坏一种物品"的
+       做法不可持续，所以现在改为编码时把真实类型记下来，重建时不需要任何猜测。
+
+    表示法：数值 -> {"@b"/"@s"/"@i"/"@l"/"@f"/"@d": 值}
+            字符串、列表、复合标签保持自然形态。
+    标记键以 @ 开头 —— 基岩版 NBT 字段名不会以 @ 开头，不会冲突。
+    """
+    if tag is None:
+        return None
+    cls = type(tag).__name__
+    if cls == "CompoundTag":
+        out: Dict[str, Any] = {}
+        for k, v in tag.items():
+            out[str(k)] = _tag_to_jsonable(v)
+        return out
+    if cls == "ListTag":
+        return [_tag_to_jsonable(v) for v in tag]
+    if cls == "ByteArrayTag":
+        return {"@B": base64.b64encode(bytes(tag)).decode("ascii")}
+    if cls == "IntArrayTag":
+        return {"@I": [int(x) for x in tag]}
+    if cls == "ByteTag":
+        return {"@b": int(tag.value)}
+    if cls == "ShortTag":
+        return {"@s": int(tag.value)}
+    if cls == "IntTag":
+        return {"@i": int(tag.value)}
+    if cls == "LongTag":
+        return {"@l": int(tag.value)}
+    if cls == "FloatTag":
+        return {"@f": float(tag.value)}
+    if cls == "DoubleTag":
+        return {"@d": float(tag.value)}
+    if cls == "StringTag":
+        return str(tag.value)
+    # 未知类型：退回 to_dict()，至少不抛异常
+    try:
+        return tag.to_dict()
+    except Exception:
+        return None
+
+
+def _build_nbt(value: Any, field_name: str = "") -> Any:
+    """把普通 Python 值按基岩版正确的标签类型重建为 NBT 标签树。
+
+    数值类型优先看 @ 标记（由 _tag_to_jsonable 写入，是标签的真实类型）。
+    只有**旧格式**的裸整数才回退到按字段名猜 —— 那是本次改动之前存的数据，
+    新写入的数据一律带标记，不再依赖字段名表。
+    """
+    from endstone.nbt import (CompoundTag, ListTag, StringTag, IntTag, LongTag,
+                             ByteTag, ShortTag, DoubleTag, FloatTag,
+                             ByteArrayTag, IntArrayTag)
+    if isinstance(value, dict):
+        # 单键 @ 标记 → 显式类型的标签（见 _tag_to_jsonable）
+        if len(value) == 1:
+            mk, mv = next(iter(value.items()))
+            if mk == "@b":
+                return ByteTag(int(mv))
+            if mk == "@s":
+                return ShortTag(int(mv))
+            if mk == "@i":
+                return IntTag(int(mv))
+            if mk == "@l":
+                return LongTag(int(mv))
+            if mk == "@f":
+                return FloatTag(float(mv))
+            if mk == "@d":
+                return DoubleTag(float(mv))
+            if mk == "@B":
+                return ByteArrayTag(base64.b64decode(mv))
+            if mk == "@I":
+                return IntArrayTag([int(x) for x in mv])
+        tag = CompoundTag()
+        for k, v in value.items():
+            tag[str(k)] = _build_nbt(v, str(k))
+        return tag
+    if isinstance(value, (list, tuple)):
+        lst = ListTag()
+        for elem in value:
+            lst.append(_build_nbt(elem, field_name))
+        return lst
+    if isinstance(value, bool):
+        return ByteTag(1 if value else 0)
+    if isinstance(value, int):
+        # 旧格式兼容：没有 @ 标记的裸整数只能按字段名猜
+        if field_name in _NBT_BYTE_FIELDS:
+            return ByteTag(value)
+        if field_name in _NBT_SHORT_FIELDS:
+            return ShortTag(value)
+        return IntTag(value)
+    if isinstance(value, float):
+        return DoubleTag(value)
+    return StringTag(str(value))
+
+
+def _encode_nbt_b64(nbt_dict: Optional[dict]) -> Optional[str]:
+    """dict -> base64(JSON)。sort_keys 保证同一份 NBT 每次编码结果一致，匹配/比对才可靠。"""
+    if not nbt_dict:
+        return None
+    try:
+        raw = json.dumps(nbt_dict, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+        return base64.b64encode(raw).decode("ascii")
+    except Exception:
+        return None
+
+
+def _decode_nbt_b64(nbt_b64: str) -> Any:
+    """base64(JSON) -> NBT 标签树。失败返回 None。"""
+    if not nbt_b64:
+        return None
+    try:
+        payload = json.loads(base64.b64decode(nbt_b64).decode("utf-8"))
+        if not payload:
+            return None
+        return _build_nbt(payload)
+    except Exception:
+        return None
 
 
 def _normalize_enchant_id(eid: str) -> str:
@@ -86,8 +248,20 @@ class InventoryManager:
 
     def _serialize_item_nbt(self, item_stack: Any) -> Optional[str]:
         """
-        将物品用户数据序列化为 Base64（Bedrock little-endian），用于完整还原附魔书、药水等 ItemMeta 无法表达的标签。
+        将物品完整 NBT 序列化为 Base64（内容为 UTF-8 JSON），用于完整还原潜影盒/收纳袋内容、
+        附魔书、铁砧命名等 ItemMeta 无法表达的标签。
+
+        注意：endstone 0.11.3 的 CompoundTag 没有 dump()，无法做二进制序列化，
+        因此走标签树遍历（_tag_to_jsonable）+ _build_nbt() 重建的路子；
+        编码用 sort_keys 保证结果稳定。
+
+        这里不能直接用 CompoundTag.to_dict()：它会把 ByteArrayTag 变成 bytes
+        导致 JSON 序列化失败，进而**静默丢掉整份 NBT**。
         """
+        def _type_id() -> str:
+            t = getattr(item_stack, "type", None)
+            return str(getattr(t, "id", t) or "?")
+
         try:
             if not item_stack:
                 return None
@@ -97,11 +271,24 @@ class InventoryManager:
             keys_fn = getattr(nbt_compound, "keys", None)
             if callable(keys_fn) and not list(keys_fn()):
                 return None
-            raw = nbt_compound.dump(byte_order="little")
-            if not raw:
+            data = _tag_to_jsonable(nbt_compound)
+            if not data:
                 return None
-            return base64.b64encode(raw).decode("ascii")
-        except Exception:
+            encoded = _encode_nbt_b64(data)
+            if encoded is None:
+                # 编码失败绝不能静默：那会变成"物品存进去了但内容没了"，
+                # 而调用方完全看不出来。这里明确报出来。
+                self._log(
+                    "error",
+                    f"[ARCInventory] NBT 编码失败，该物品的内容将被丢弃: type={_type_id()}",
+                )
+            return encoded
+        except Exception as e:
+            self._log(
+                "error",
+                f"[ARCInventory] NBT 序列化异常，该物品的内容将被丢弃: "
+                f"type={_type_id()} err={e}",
+            )
             return None
 
     def _get_item_enchants(self, item_stack: Any) -> Dict[str, int]:
@@ -658,10 +845,7 @@ class InventoryManager:
     def _restore_item_nbt(self, item_stack: Any, nbt_b64: str) -> bool:
         """还原用户 NBT；成功返回 True。"""
         try:
-            from endstone.nbt import load
-
-            raw_nbt = base64.b64decode(nbt_b64)
-            tag, _name = load(raw_nbt, byte_order="little")
+            tag = _decode_nbt_b64(nbt_b64)
             if tag is None or not hasattr(item_stack, "nbt"):
                 return False
             item_stack.nbt = tag
@@ -678,10 +862,8 @@ class InventoryManager:
             return {}
         try:
             from endstone.inventory import ItemStack
-            from endstone.nbt import load
 
-            raw_nbt = base64.b64decode(nbt_b64)
-            tag, _name = load(raw_nbt, byte_order="little")
+            tag = _decode_nbt_b64(nbt_b64)
             if tag is None:
                 return {}
             probe = ItemStack(type="minecraft:enchanted_book", amount=1)
