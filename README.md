@@ -1,7 +1,7 @@
 # EndStone ARC Inventory / 弧光背包管理器
 
-[![Codacy Grade](https://app.codacy.com/project/badge/Grade/4c63155069c84452b4854f597cd258a7)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-Inventory-Manager/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
-[![版本](https://img.shields.io/badge/版本-0.2.0-blue.svg)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Inventory-Manager)
+[![Codacy Grade](https://app.codacy.com/project/badge/Grade/4c63155069c84452b4854f597cd258a7)](https://app.codacy.com/gh/ARC-Game-Club/EndstoneMC-ARC-Inventory-Manager/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![版本](https://img.shields.io/badge/版本-0.2.0-blue.svg)](https://github.com/ARC-Game-Club/EndstoneMC-ARC-Inventory-Manager)
 [![EndStone](https://img.shields.io/badge/EndStone-0.10+-green.svg)](https://github.com/EndstoneMC/endstone)
 
 弧光系列共享背包工具插件。统一处理玩家背包的读取、匹配、扣除、发放、定点槽位、护甲与整包快照（含附魔、Lore、Bedrock NBT），供按钮商店、枪战等插件复用。
@@ -112,7 +112,7 @@ inv.api_clear_inventory(player, include_contents=True, include_armor=True)
 ## 更新日志
 
 ### v0.2.0
-- **修复 NBT 序列化/还原从未生效**（感谢 [@yichen-ender](https://github.com/yichen-ender) 的 [PR #1](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Inventory-Manager/pull/1)）：`endstone.nbt`（0.11.x）只导出标签类，没有 `load()` / `dump()`，原有实现两处调用均抛异常且被 `except` 静默吞掉，导致 `nbt_b64` 恒为空、完整 NBT 还原从未成功。改为遍历标签树编码 + 按记录的真实类型重建
+- **修复 NBT 序列化/还原从未生效**（感谢 [@yichen-ender](https://github.com/yichen-ender) 的 [PR #1](https://github.com/ARC-Game-Club/EndstoneMC-ARC-Inventory-Manager/pull/1)）：`endstone.nbt`（0.11.x）只导出标签类，没有 `load()` / `dump()`，原有实现两处调用均抛异常且被 `except` 静默吞掉，导致 `nbt_b64` 恒为空、完整 NBT 还原从未成功。改为遍历标签树编码 + 按记录的真实类型重建
 - **修复 ByteArrayTag 导致整份 NBT 被静默丢弃**：`to_dict()` 会把 `ByteArrayTag` 变成 `bytes` 使 JSON 序列化失败，异常被吞后返回 `None` —— 潜影盒存进去但内容物丢失且无任何报错
 - **修复附魔书等级变 0、烟花飞行时间变 0**：重建标签类型原本靠字段名表猜，表里没收录的字段（`lvl` / `id` / `Flight`）被降级成 `IntTag`，客户端按错误类型读取只能拿到默认值。改为编码时记录真实标签类型（`@b` / `@s` / `@i` / `@l` / `@f` / `@d` / `@B` / `@I` 标记），任何物品的任何字段都能正确往返，不再依赖猜测
 - 编码失败时打 `error` 日志（含物品类型），不再静默

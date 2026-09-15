@@ -15,7 +15,7 @@ license = { file = "LICENSE" }
 keywords = ["endstone", "plugin", "inventory", "arc"]
 
 [project.urls]
-Homepage = "https://github.com/ARC-Minecraft/EndstoneMC-ARC-Inventory-Manager"
+Homepage = "https://github.com/ARC-Game-Club/EndstoneMC-ARC-Inventory-Manager"
 
 [project.entry-points."endstone"]
 arc_inventory = "endstone_arc_inventory:ARCInventoryPlugin"
