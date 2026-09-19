@@ -24,7 +24,7 @@
 - **发放物品**：`give_item` / `give_item_count` — 支持定点槽、护甲槽、避开热键从末尾填充
 - **快照 / 还原 / 清空**：整包含空槽；可选护甲
 - **序列化**：公开 `serialize_item` / `make_item_stack`
-- **NBT 内容摘要**：`summarize_item_nbt` / `api_summarize_item`——解析 `nbt_b64` 生成中文摘要行，供拍卖行、邮箱等展示富物品：容器**内容物前 4 项**（自定义名优先，其次经 `make_item_stack` + 服务器语言本地化）与**附魔前 4 条中文名**（罗马数字等级，兼容条目 `enchants` 与 NBT `tag.ench` 两条来源），超出部分显示「等X项」
+- **NBT 内容摘要**：`summarize_item_nbt` / `api_summarize_item`——解析 `nbt_b64` 生成中文摘要行，供拍卖行、邮箱等展示富物品：容器**内容物前 4 项**（自定义名优先，其次经 `make_item_stack` + 服务器语言本地化）与**附魔前 4 条中文名**（罗马数字等级，兼容条目 `enchants` 与 NBT 根层 `ench` 两条来源），超出部分显示「等X项」
 
 ## 安装
 
@@ -117,10 +117,11 @@ inv.api_clear_inventory(player, include_contents=True, include_armor=True)
 - **新增 NBT 内容摘要 API**：`api_summarize_item(item_info, max_entries=4)` / `InventoryManager.summarize_item_nbt`——
   解析富物品条目的 `nbt_b64`，生成供拍卖行、邮箱等直接展示的中文摘要行：
   - **内容物**：潜影盒等容器的 `Items` 列表，前 4 项（自定义名称优先，其次 `make_item_stack` + 服务器语言翻译的本地化名），格式 `名称×数量`，超出显示「等X项」
-  - **附魔**：前 4 条中文名 + 罗马数字等级（内置基岩版 40 个附魔 id/名称键双向映射；兼容条目 `enchants` 字符串 id 与 NBT `tag.ench` 数字 id 两条来源），超出显示「等X项」
+  - **附魔**：前 4 条中文名 + 罗马数字等级（内置基岩版 40 个附魔 id/名称键双向映射；兼容条目 `enchants` 字符串 id 与 NBT 根层 `ench` 数字 id 两条来源），超出显示「等X项」
   - 收纳袋（1.26）内容为组件化存储、不在 `nbt_b64` 中，无法摘要（调用方自行说明）
   - 纯增量改动，无任何既有接口/格式变化
-- 消费方：弧光网上商城 v0.2.2（拍品详情）、弧光核心 v0.9.72（邮件附件详情）
+- 消费方：弧光网上商城 v0.2.3（拍品详情）、弧光核心 v0.9.73（邮件附件详情）
+- 合并修正（2026-09-19）：NBT 读取深度对齐基岩真实数据——`display`/`ench` 在条目根层读取，兼容 Java 风格 `tag` 包装
 
 ### v0.2.0
 - **修复 NBT 序列化/还原从未生效**（感谢 [@yichen-ender](https://github.com/yichen-ender) 的 [PR #1](https://github.com/ARC-Game-Club/EndstoneMC-ARC-Inventory-Manager/pull/1)）：`endstone.nbt`（0.11.x）只导出标签类，没有 `load()` / `dump()`，原有实现两处调用均抛异常且被 `except` 静默吞掉，导致 `nbt_b64` 恒为空、完整 NBT 还原从未成功。改为遍历标签树编码 + 按记录的真实类型重建

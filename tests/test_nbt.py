@@ -250,6 +250,67 @@ check("  Flight 值正确 = 3", _fw["Fireworks"]["Flight"].value == 3)
 check("嵌套 Explosions[].Type 是 ByteTag",
       type(_fw["Fireworks"]["Explosions"][0]["Type"]).__name__ == "ByteTag")
 
+# ---- 10. summarize_item_nbt NBT 摘要（基岩真实数据 display/ench 在根层）----
+def _sum_b64(tag_dict):
+    return _encode_nbt_b64(json.loads(json.dumps(_tag_to_jsonable(_build_nbt(tag_dict)))))
+
+
+# 真实基岩潜影盒：内含一把自定义名+附魔剑（display/ench 在内层条目根级，无 tag 包装）
+_SUM_SHULKER = {
+    "Count": {"@b": 1}, "Damage": {"@s": 0},
+    "Name": "minecraft:shulker_box", "WasPickedUp": {"@b": 0},
+    "Items": [
+        {"Count": {"@b": 1}, "Damage": {"@s": 0}, "Name": "minecraft:diamond_sword",
+         "Slot": {"@b": 0}, "WasPickedUp": {"@b": 0},
+         "display": {"Name": "屠龙宝刀"},
+         "ench": [{"id": {"@s": 9}, "lvl": {"@s": 5}}]},
+        {"Count": {"@b": 64}, "Damage": {"@s": 0}, "Name": "minecraft:barrel",
+         "Slot": {"@b": 1}, "WasPickedUp": {"@b": 0}},
+    ],
+}
+_lines = mgr.summarize_item_nbt({"type": "minecraft:shulker_box", "count": 1,
+                                 "nbt_b64": _sum_b64(_SUM_SHULKER)})
+_check_line = next((l for l in _lines if l.startswith("内容物：")), "")
+check("摘要：内容物显示自定义名（非回落短 id）", "屠龙宝刀×1" in _check_line)
+check("  内容物含第二个物品且数量正确", "barrel×64" in _check_line)
+
+# 附魔：enchants 主来源
+_lines2 = mgr.summarize_item_nbt({
+    "type": "minecraft:diamond_sword", "count": 1,
+    "enchants": {"minecraft:sharpness": 5, "minecraft:unbreaking": 3},
+    "nbt_b64": _sum_b64({"Name": "minecraft:diamond_sword"}),
+})
+check("摘要：enchants 主来源生成附魔行",
+      any(l.startswith("附魔：") and "锋利 V" in l and "耐久 III" in l for l in _lines2))
+
+# NBT 根层 ench fallback（item_info 缺 enchants 字段；ench 在根层，非 tag.ench）
+EBOOK_ROOT = {
+    "Name": "minecraft:enchanted_book", "Count": {"@b": 1}, "Damage": {"@s": 0},
+    "ench": [{"id": {"@s": 9}, "lvl": {"@s": 5}}],
+}
+_lines3 = mgr.summarize_item_nbt({"type": "minecraft:enchanted_book", "count": 1,
+                                  "nbt_b64": _sum_b64(EBOOK_ROOT)})
+check("摘要：NBT 根层 ench fallback 生效", any("锋利 V" in l for l in _lines3))
+
+# Java 风格 tag 包装兼容（旧数据/异常来源）
+JAVA_WRAP = {
+    "Name": "minecraft:enchanted_book", "Count": {"@b": 1},
+    "tag": {"ench": [{"id": {"@s": 17}, "lvl": {"@s": 3}}]},
+}
+_lines4 = mgr.summarize_item_nbt({"type": "minecraft:enchanted_book", "count": 1,
+                                  "nbt_b64": _sum_b64(JAVA_WRAP)})
+check("摘要：Java tag 包装结构仍兼容", any("耐久 III" in l for l in _lines4))
+
+# 边界：无 NBT / 垃圾 b64 / 数量「等X项」
+check("摘要：无 nbt_b64 返回空", mgr.summarize_item_nbt({"type": "minecraft:stone"}) == [])
+check("摘要：垃圾 b64 返回空", mgr.summarize_item_nbt({"type": "x", "nbt_b64": "!!!bad!!!"}) == [])
+_MANY = {"Items": [{"Name": f"minecraft:stone{i}", "Count": 1, "Slot": i}
+                   for i in range(6)]}
+_lines5 = mgr.summarize_item_nbt({"type": "minecraft:shulker_box", "count": 1,
+                                  "nbt_b64": _sum_b64(_MANY)})
+check("摘要：超出 max_entries 显示「等X项」",
+      any("等6项" in l for l in _lines5))
+
 # ---- 结果输出 ----
 fails = [n for n, ok in RESULTS if not ok]
 print("PASS: %d / %d" % (len(RESULTS) - len(fails), len(RESULTS)))

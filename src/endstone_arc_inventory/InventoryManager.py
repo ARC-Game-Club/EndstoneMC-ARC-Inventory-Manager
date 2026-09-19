@@ -1055,7 +1055,8 @@ class InventoryManager:
                 if not isinstance(it, dict):
                     continue
                 count = self._nbt_num(it.get("Count"), 1)
-                inner_tag = it.get("tag") if isinstance(it.get("tag"), dict) else {}
+                # 基岩真实数据 display/ench 就在条目根层（同 Items），有 tag 包装则是 Java 风格
+                inner_tag = it.get("tag") if isinstance(it.get("tag"), dict) else it
                 display = inner_tag.get("display") if isinstance(inner_tag.get("display"), dict) else {}
                 name = display.get("Name") or it.get("CustomName") or None
                 if not name:
@@ -1066,14 +1067,14 @@ class InventoryManager:
                 line += f" 等{len(items)}项"
             lines.append(line)
 
-        # 2) 附魔:优先 item_info["enchants"],否则 NBT tag.ench(数字 id)
+        # 2) 附魔:优先 item_info["enchants"],否则 NBT 根层 ench(数字 id)
         ench_dict = item_info.get("enchants")
         if isinstance(ench_dict, dict) and ench_dict:
             pairs = [self._enchant_display(k, self._nbt_num(v, 1))
                      for k, v in list(ench_dict.items())[:max_entries]]
             total = len(ench_dict)
         else:
-            inner_tag = tag.get("tag") if isinstance(tag.get("tag"), dict) else {}
+            inner_tag = tag.get("tag") if isinstance(tag.get("tag"), dict) else tag
             ench_list = inner_tag.get("ench")
             if not isinstance(ench_list, list):
                 ench_list = []
