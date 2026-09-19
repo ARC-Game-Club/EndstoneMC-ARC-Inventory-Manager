@@ -958,6 +958,136 @@ class InventoryManager:
         data = int(item_info.get("data", 0) or 0)
         return self._prepare_give_stack(type_id, amount, data, item_info)
 
+
+    # ---------------- NBT 内容摘要（拍卖/邮件展示用） ----------------
+
+    # 基岩版附魔数字 id → 中文名（Java/基岩通用 id 0-39）
+    ENCHANT_NAMES = {
+        0: "保护", 1: "火焰保护", 2: "摔落缓冲", 3: "爆炸保护", 4: "弹射物保护",
+        5: "荆棘", 6: "水下呼吸", 7: "深海探索者", 8: "水下速掘", 9: "锋利",
+        10: "亡灵杀手", 11: "节肢杀手", 12: "击退", 13: "火焰附加", 14: "抢夺",
+        15: "效率", 16: "精准采集", 17: "耐久", 18: "时运", 19: "力量",
+        20: "冲击", 21: "火矢", 22: "无限", 23: "海之眷顾", 24: "饵钓",
+        25: "冰霜行者", 26: "经验修补", 27: "绑定诅咒", 28: "消失诅咒", 29: "穿刺",
+        30: "激流", 31: "引雷", 32: "多重射击", 33: "快速装填", 34: "穿透",
+        35: "灵魂疾行", 36: "迅捷潜行", 37: "风爆", 38: "致密", 39: "破甲",
+    }
+    ENCHANT_KEY_NAMES = {
+        "protection": 0, "fire_protection": 1, "feather_falling": 2, "blast_protection": 3,
+        "projectile_protection": 4, "thorns": 5, "respiration": 6, "depth_strider": 7,
+        "aqua_affinity": 8, "sharpness": 9, "smite": 10, "bane_of_arthropods": 11,
+        "knockback": 12, "fire_aspect": 13, "looting": 14, "efficiency": 15,
+        "silk_touch": 16, "unbreaking": 17, "fortune": 18, "power": 19, "punch": 20,
+        "flame": 21, "infinity": 22, "luck_of_the_sea": 23, "lure": 24,
+        "frost_walker": 25, "mending": 26, "binding_curse": 27, "vanishing_curse": 28,
+        "impaling": 29, "riptide": 30, "channeling": 31, "multishot": 32,
+        "quick_charge": 33, "piercing": 34, "soul_speed": 35, "swift_sneak": 36,
+        "wind_burst": 37, "density": 38, "breach": 39,
+    }
+
+    @staticmethod
+    def _nbt_num(value, default=0) -> int:
+        """{"@b"/"@s"/"@i"/"@l": n} 或裸数值 → int。"""
+        if isinstance(value, dict):
+            for v in value.values():
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    continue
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _enchant_display(self, eid, level: int) -> str:
+        try:
+            key = str(eid)
+            num = int(key)
+        except (TypeError, ValueError):
+            k = str(eid or "").split(":")[-1]
+            num = self.ENCHANT_KEY_NAMES.get(k)
+        name = self.ENCHANT_NAMES.get(num if num is not None else -1)
+        if not name:
+            name = str(eid).split(":")[-1]
+        romans = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+        level_text = romans[level] if 0 < level < len(romans) else str(level)
+        return f"{name} {level_text}" if level > 1 else name
+
+    def _translate_contained_id(self, type_id: str) -> str:
+        """容器内物品 id → 本地化名;失败回落短 id。"""
+        if not type_id or not isinstance(type_id, str):
+            return "未知物品"
+        try:
+            stack = self.make_item_stack({"type": type_id, "count": 1})
+            if stack is not None and self._server is not None:
+                key = getattr(stack.type, "translation_key", "")
+                translated = self._server.language.translate(key, None, None)
+                if translated and translated != key:
+                    return str(translated)
+        except Exception:
+            pass
+        return type_id.split(":")[-1]
+
+    def summarize_item_nbt(self, item_info: Dict[str, Any], max_entries: int = 4) -> List[str]:
+        """生成物品 NBT 摘要行(中文),最多展示前 max_entries 项,多余标注「等X项」。
+
+        返回行列表(可能为空):
+        - 内容物：名称×数量、… 等 X 项   （潜影盒等 NBT Items 列表）
+        - 附魔：效率 III、耐久 III、… 等 X 项
+        收纳袋(1.26)内容为组件化存储、不在 nbt_b64 中,无法摘要。
+        """
+        lines: List[str] = []
+        try:
+            import base64 as _b64
+            tag = json.loads(_b64.b64decode(str(item_info.get("nbt_b64") or "") or "e30=")) \
+                if item_info.get("nbt_b64") else {}
+        except Exception:
+            tag = {}
+        if not isinstance(tag, dict):
+            tag = {}
+
+        # 1) 内容物:潜影盒等容器的 Items 列表
+        items = tag.get("Items")
+        if isinstance(items, list) and items:
+            parts = []
+            for it in items[:max_entries]:
+                if not isinstance(it, dict):
+                    continue
+                count = self._nbt_num(it.get("Count"), 1)
+                inner_tag = it.get("tag") if isinstance(it.get("tag"), dict) else {}
+                display = inner_tag.get("display") if isinstance(inner_tag.get("display"), dict) else {}
+                name = display.get("Name") or it.get("CustomName") or None
+                if not name:
+                    name = self._translate_contained_id(str(it.get("Name") or it.get("id") or ""))
+                parts.append(f"{name}×{int(count)}")
+            line = "内容物：" + "、".join(parts)
+            if len(items) > max_entries:
+                line += f" 等{len(items)}项"
+            lines.append(line)
+
+        # 2) 附魔:优先 item_info["enchants"],否则 NBT tag.ench(数字 id)
+        ench_dict = item_info.get("enchants")
+        if isinstance(ench_dict, dict) and ench_dict:
+            pairs = [self._enchant_display(k, self._nbt_num(v, 1))
+                     for k, v in list(ench_dict.items())[:max_entries]]
+            total = len(ench_dict)
+        else:
+            inner_tag = tag.get("tag") if isinstance(tag.get("tag"), dict) else {}
+            ench_list = inner_tag.get("ench")
+            if not isinstance(ench_list, list):
+                ench_list = []
+            pairs = [self._enchant_display(self._nbt_num(e.get("id")),
+                                           self._nbt_num(e.get("lvl"), 1))
+                     for e in ench_list[:max_entries] if isinstance(e, dict)]
+            total = len(ench_list)
+        if pairs:
+            line = "附魔：" + "、".join(pairs)
+            if total > max_entries:
+                line += f" 等{total}项"
+            lines.append(line)
+        return lines
+
     def set_slot(
         self,
         player: Any,

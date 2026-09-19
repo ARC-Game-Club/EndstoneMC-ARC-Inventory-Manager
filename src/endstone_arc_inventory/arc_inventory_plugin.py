@@ -274,6 +274,16 @@ class ARCInventoryPlugin(Plugin):
             return None
         return mgr.make_item_stack(item_info)
 
+    def api_summarize_item(self, item_info: Dict[str, Any], max_entries: int = 4) -> List[str]:
+        """生成物品 NBT 内容物/附魔中文摘要行(拍卖、邮件等展示用),见 InventoryManager.summarize_item_nbt。"""
+        mgr = self._mgr()
+        if mgr is None or not isinstance(item_info, dict):
+            return []
+        try:
+            return list(mgr.summarize_item_nbt(item_info, max_entries=int(max_entries)) or [])
+        except Exception:
+            return []
+
     def api_get_inventory_manager(self) -> Optional[InventoryManager]:
         """高级用法：直接拿到 InventoryManager 实例（与按钮商店原先用法一致）。"""
         return self._mgr()
